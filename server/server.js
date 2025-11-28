@@ -1,7 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const words = ['guitar', 'bags'] // array of strings
+const words = require('./beginnerWords');
 
 const app = express();
 const server = http.createServer(app);
@@ -14,8 +14,16 @@ const io = new Server(server, {
 });
 
 // roomCode -> roomState
-// roomState: { players, strokes, hostId, gameStarted, drawerId, currentWord, guessedPlayers }
+// roomState: {
+//   players, strokes, hostId, gameStarted,
+//   drawerId, currentWord, guessedPlayers,
+//   turnOrder, drawerIndex,
+//   roundEndTime, roundTimeout,
+//   roundNumber, drawnThisRound
+// }
 const rooms = {};
+
+const ROUND_MS = 90_000; // 90 seconds
 
 // Simple room code generator (e.g. "k3f9a2")
 function generateRoomCode() {
@@ -29,7 +37,72 @@ function getRandomWord() {
   return words[idx];
 }
 
-// Start a drawing round in a room: choose drawer + word, reset guessedPlayers
+function getRandomWords(count = 3) {
+  const copy = [...words];
+  const picks = [];
+  while (copy.length && picks.length < count) {
+    const idx = Math.floor(Math.random() * copy.length);
+    picks.push(copy.splice(idx, 1)[0]);
+  }
+  return picks;
+}
+
+// End the current round: show scores, then schedule next round
+function endRound(roomCode) {
+  const room = rooms[roomCode];
+  if (!room) return;
+
+  console.log('Ending round in room', roomCode, 'word =', room.currentWord);
+
+  // Ensure turn order matches current player list
+  const playerIds = Object.keys(room.players);
+  room.turnOrder = room.turnOrder.filter((id) => room.players[id]);
+  if (room.turnOrder.length === 0 && playerIds.length > 0) {
+    room.turnOrder = playerIds.slice();
+    room.drawerIndex = 0;
+  }
+
+  // clear any existing timeout handle
+  if (room.roundTimeout) {
+    clearTimeout(room.roundTimeout);
+    room.roundTimeout = null;
+  }
+
+  // emit scores + word for modal
+  io.to(roomCode).emit('round_ended', {
+    players: room.players,
+    word: room.currentWord,
+    roundComplete:
+      room.turnOrder.length > 0 &&
+      room.turnOrder.every((id) => room.drawnThisRound && room.drawnThisRound[id]),
+    roundNumber: room.roundNumber,
+  });
+
+  // reset per-round state
+  room.drawerId = null;
+  room.currentWord = null;
+  room.guessedPlayers = {};
+  room.roundEndTime = null;
+  room.wordOptions = [];
+
+  // If everyone has drawn, advance to next round cycle
+  const allDrew =
+    room.turnOrder.length > 0 &&
+    room.turnOrder.every((id) => room.drawnThisRound && room.drawnThisRound[id]);
+  if (allDrew) {
+    room.drawnThisRound = {};
+    room.roundNumber += 1;
+  }
+
+  // schedule next round after 5s if game still running and there are players
+  if (room.gameStarted && Object.keys(room.players).length > 0) {
+    setTimeout(() => {
+      startRound(roomCode);
+    }, 5000);
+  }
+}
+
+// Start a drawing round in a room: choose drawer + word, reset guessedPlayers, set timer
 function startRound(roomCode) {
   const room = rooms[roomCode];
   if (!room) return;
@@ -37,24 +110,80 @@ function startRound(roomCode) {
   const playerIds = Object.keys(room.players);
   if (playerIds.length === 0) return;
 
-  // For now: pick a random drawer each time
-  const drawerId = playerIds[Math.floor(Math.random() * playerIds.length)];
-  const word = getRandomWord();
+  // Keep turnOrder in sync with players
+  room.turnOrder = room.turnOrder.filter((id) => room.players[id]);
+  if (room.turnOrder.length === 0) {
+    room.turnOrder = playerIds.slice();
+    room.drawerIndex = 0;
+  }
+  if (!room.drawnThisRound) room.drawnThisRound = {};
+  if (typeof room.roundNumber !== 'number') room.roundNumber = 1;
+
+  // If everyone has drawn in this round, reset for the next round
+  const everyoneDrew = room.turnOrder.every((id) => room.drawnThisRound[id]);
+  if (everyoneDrew) {
+    room.drawnThisRound = {};
+    room.roundNumber += 1;
+  }
+
+  if (room.drawerIndex >= room.turnOrder.length) room.drawerIndex = 0;
+
+  // Pick the next player who has not drawn in this round
+  let drawerId = null;
+  for (let i = 0; i < room.turnOrder.length; i++) {
+    const candidate = room.turnOrder[room.drawerIndex];
+    room.drawerIndex = (room.drawerIndex + 1) % room.turnOrder.length;
+    if (!room.drawnThisRound[candidate]) {
+      drawerId = candidate;
+      break;
+    }
+  }
+
+  // If we somehow couldn't find a drawer, start a fresh round
+  if (!drawerId) {
+    room.drawnThisRound = {};
+    room.roundNumber += 1;
+    room.drawerIndex = 0;
+    drawerId = room.turnOrder[0];
+  }
 
   room.drawerId = drawerId;
-  room.currentWord = word;
+  room.currentWord = null;
+  room.wordOptions = getRandomWords(3);
   room.guessedPlayers = {}; // socketId -> true
+  room.roundEndTime = null;
+  if (room.roundTimeout) {
+    clearTimeout(room.roundTimeout);
+    room.roundTimeout = null;
+  }
 
-  console.log('Starting round in room', roomCode, 'drawer =', drawerId, 'word =', word);
+  room.drawnThisRound[drawerId] = true;
+  const turnNumber = Object.keys(room.drawnThisRound).length;
+  const totalTurns = room.turnOrder.length;
 
-  // Notify everyone who is drawing, and send only the length to guessers
+  console.log(
+    'Starting round in room',
+    roomCode,
+    'round =',
+    room.roundNumber,
+    'turn =',
+    turnNumber + '/' + totalTurns,
+    'drawer =',
+    drawerId
+  );
+
+  // Notify everyone who is drawing, and send only the length + end time
   io.to(roomCode).emit('round_started', {
     drawerId,
-    wordLength: word.length,
+    wordLength: 0,
+    roundEndTime: null, // starts after drawer picks
+    roundNumber: room.roundNumber,
+    turnNumber,
+    totalTurns,
   });
 
-  // Send the actual word ONLY to the drawer
-  io.to(drawerId).emit('your_word', { word });
+  // Send word options ONLY to the drawer
+  io.to(drawerId).emit('word_options', { options: room.wordOptions });
 }
 
 io.on('connection', (socket) => {
@@ -85,25 +214,35 @@ io.on('connection', (socket) => {
       drawerId: null,
       currentWord: null,
       guessedPlayers: {},    // socketId -> true
+      turnOrder: [],
+      drawerIndex: 0,
+      roundEndTime: null,
+      roundTimeout: null,
+      wordOptions: [],
+      roundNumber: 1,
+      drawnThisRound: {},
     };
+
+    const room = rooms[roomCode];
 
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     socket.data.name = trimmedName;
 
-    rooms[roomCode].players[socket.id] = { name: trimmedName, score: 0 };
+    room.players[socket.id] = { name: trimmedName, score: 0 };
+    room.turnOrder.push(socket.id);
 
     console.log('Room created:', roomCode, 'by', trimmedName);
 
     socket.emit('room_created', {
       roomCode,
-      players: rooms[roomCode].players,
-      hostId: rooms[roomCode].hostId,
+      players: room.players,
+      hostId: room.hostId,
     });
 
     io.to(roomCode).emit('players_update', {
-      players: rooms[roomCode].players,
-      hostId: rooms[roomCode].hostId,
+      players: room.players,
+      hostId: room.hostId,
     });
   });
 
@@ -132,6 +271,7 @@ io.on('connection', (socket) => {
 
     // new player starts at score 0
     room.players[socket.id] = { name: trimmedName, score: 0 };
+    room.turnOrder.push(socket.id);
 
     console.log('Player', trimmedName, 'joined room', trimmedCode);
 
@@ -174,6 +314,57 @@ io.on('connection', (socket) => {
 
     // Start first round (choose drawer + word)
     startRound(roomCode);
+  });
+
+  // Drawer picks one word from the provided options to start the timer
+  socket.on('select_word', ({ word }) => {
+    const roomCode = socket.data.roomCode;
+    if (!roomCode || !rooms[roomCode]) return;
+
+    const room = rooms[roomCode];
+    if (socket.id !== room.drawerId) return;
+    if (!room.wordOptions || room.wordOptions.length === 0) return;
+    if (room.currentWord) return; // already chosen
+
+    const normalizedChoice = (word || '').toLowerCase();
+    const index = room.wordOptions.findIndex(
+      (w) => (w || '').toLowerCase() === normalizedChoice
+    );
+    if (index === -1) return;
+
+    const chosenWord = room.wordOptions[index];
+    room.currentWord = chosenWord;
+    room.wordOptions = [];
+
+    const endTime = Date.now() + ROUND_MS;
+    room.roundEndTime = endTime;
+
+    if (room.roundTimeout) {
+      clearTimeout(room.roundTimeout);
+    }
+    room.roundTimeout = setTimeout(() => {
+      endRound(roomCode);
+    }, ROUND_MS);
+
+    console.log(
+      'Word selected in room',
+      roomCode,
+      'drawer =',
+      socket.id,
+      'word =',
+      chosenWord,
+      'endsAt =',
+      endTime
+    );
+
+    io.to(roomCode).emit('word_selected', {
+      drawerId: room.drawerId,
+      wordLength: chosenWord.length,
+      roundEndTime: endTime,
+    });
+
+    // Send the actual word ONLY to the drawer
+    io.to(socket.id).emit('your_word', { word: chosenWord });
   });
 
   // Drawing events (per room)
@@ -267,18 +458,23 @@ io.on('connection', (socket) => {
     if (roomCode && rooms[roomCode]) {
       const room = rooms[roomCode];
       delete room.players[socket.id];
+      if (room.drawnThisRound) {
+        delete room.drawnThisRound[socket.id];
+      }
+
+      // Remove from turnOrder
+      room.turnOrder = room.turnOrder.filter((id) => id !== socket.id);
+      if (room.drawerId === socket.id) {
+        room.drawerId = null;
+        room.currentWord = null;
+        room.guessedPlayers = {};
+        room.wordOptions = [];
+      }
 
       // If host left, pick a new host if any players remain
       if (room.hostId === socket.id) {
         const remainingIds = Object.keys(room.players);
         room.hostId = remainingIds.length > 0 ? remainingIds[0] : null;
-      }
-
-      // If drawer left, clear drawer/word (you could also auto start a new round)
-      if (room.drawerId === socket.id) {
-        room.drawerId = null;
-        room.currentWord = null;
-        room.guessedPlayers = {};
       }
 
       if (Object.keys(room.players).length > 0) {
@@ -288,6 +484,10 @@ io.on('connection', (socket) => {
         });
       } else {
         console.log('Deleting empty room:', roomCode);
+        // clear any outstanding timer
+        if (room.roundTimeout) {
+          clearTimeout(room.roundTimeout);
+        }
         delete rooms[roomCode];
       }
     }

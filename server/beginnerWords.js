@@ -134,3 +134,5 @@ const beginnerWords = [
     "suit case", "brief case", "pencil case", "phone case", "glasses case", "jewelry case", "display case", "book case", "window case", "storage case",
     "tool box", "sewing kit", "first aid", "fishing tackle", "art kit", "science kit", "makeup kit", "shaving kit", "travel kit", "emergency kit"
   ];
+
+module.exports = beginnerWords;
