@@ -18,13 +18,13 @@ function Game() {
   const [gameStarted, setGameStarted] = useState(false);
 
   const [chatInput, setChatInput] = useState('');
-  // chatLog: entries can be { name, message } OR { system: true, text }
   const [chatLog, setChatLog] = useState([]);
 
   // drawer + word
   const [drawerId, setDrawerId] = useState(null);
   const [myWord, setMyWord] = useState(null);
   const [wordLength, setWordLength] = useState(0);
+  const [wordMask, setWordMask] = useState('');
   const [wordChoices, setWordChoices] = useState([]);
   const [selectingWord, setSelectingWord] = useState(false);
 
@@ -34,7 +34,8 @@ function Game() {
 
   // round end modal
   const [showScoreModal, setShowScoreModal] = useState(false);
-  const [scoreboard, setScoreboard] = useState(null); // { players: [], word }
+  const [scoreboard, setScoreboard] = useState(null);
+  const [gameOverData, setGameOverData] = useState(null);
 
   useEffect(() => {
     console.log('Setting up socket listeners in Game');
@@ -60,11 +61,21 @@ function Game() {
       setChatLog([]);
       setRoundEndTime(null);
       setTimeLeftSec(0);
+      setWordMask('');
+      setGameOverData(null);
     });
 
     socket.on(
       'room_joined',
-      ({ roomCode, players, hostId, gameStarted, drawerId, wordLength }) => {
+      ({
+        roomCode,
+        players,
+        hostId,
+        gameStarted,
+        drawerId,
+        wordLength,
+        wordMask,
+      }) => {
         console.log(
           'room_joined event received:',
           roomCode,
@@ -72,7 +83,8 @@ function Game() {
           hostId,
           gameStarted,
           drawerId,
-          wordLength
+          wordLength,
+          wordMask
         );
         setRoomCode(roomCode);
         setPlayers(players);
@@ -84,11 +96,13 @@ function Game() {
         setDrawerId(drawerId || null);
         setMyWord(null);
         setWordLength(wordLength || 0);
+        setWordMask(wordMask || '');
         setWordChoices([]);
         setSelectingWord(false);
         setChatLog([]);
         setRoundEndTime(null);
         setTimeLeftSec(0);
+        setGameOverData(null);
       }
     );
 
@@ -112,9 +126,10 @@ function Game() {
       setWordLength(0);
       setRoundEndTime(null);
       setChatLog([]);
+      setWordMask('');
+      setGameOverData(null);
     });
 
-    // round + word events
     socket.on(
       'round_started',
       ({ drawerId, wordLength, roundEndTime, roundNumber, turnNumber, totalTurns }) => {
@@ -136,8 +151,9 @@ function Game() {
         setMyWord(null);
         setWordLength(wordLength || 0);
         setRoundEndTime(roundEndTime || null);
-      setWordChoices([]);
-      setSelectingWord(false);
+        setWordMask('');
+        setWordChoices([]);
+        setSelectingWord(false);
 
         // log in chat
         setChatLog((prev) => [
@@ -164,12 +180,14 @@ function Game() {
       setMyWord(null);
       setWordLength(0);
       setRoundEndTime(null);
+      setWordMask('');
     });
 
-    socket.on('word_selected', ({ wordLength, roundEndTime }) => {
-      console.log('word_selected received:', wordLength, roundEndTime);
+    socket.on('word_selected', ({ wordLength, roundEndTime, wordMask }) => {
+      console.log('word_selected received:', wordLength, roundEndTime, wordMask);
       setWordLength(wordLength || 0);
       setRoundEndTime(roundEndTime || null);
+      setWordMask(wordMask || '');
       setWordChoices([]);
       setSelectingWord(false);
       setChatLog((prev) => [
@@ -184,6 +202,7 @@ function Game() {
       setWordLength(word.length);
       setSelectingWord(false);
       setWordChoices([]);
+      setWordMask('');
     });
 
     // normal chat messages
@@ -210,7 +229,6 @@ function Game() {
       ]);
     });
 
-    // round ended -> show modal, then server will start next round after 5s
     socket.on('round_ended', ({ players, word, roundComplete, roundNumber }) => {
       console.log(
         'round_ended received, word =',
@@ -233,6 +251,7 @@ function Game() {
       setSelectingWord(false);
       setMyWord(null);
       setWordLength(0);
+      setWordMask('');
       setDrawerId(null);
 
       if (roundComplete) {
@@ -251,10 +270,9 @@ function Game() {
           },
         ]);
 
-        // hide modal after 5 seconds
         setTimeout(() => {
           setShowScoreModal(false);
-        }, 5000);
+        }, 4000);
       } else {
         setScoreboard(null);
         setShowScoreModal(false);
@@ -266,6 +284,32 @@ function Game() {
           },
         ]);
       }
+    });
+
+    socket.on('game_over', ({ players, roundsPlayed }) => {
+      console.log('game_over received', players, roundsPlayed);
+      setGameOverData({
+        players,
+        roundsPlayed,
+      });
+      setShowScoreModal(false);
+      setScoreboard(null);
+      setDrawerId(null);
+      setRoundEndTime(null);
+      setTimeLeftSec(0);
+      setGameStarted(false);
+      setMyWord(null);
+      setWordLength(0);
+      setWordMask('');
+      setWordChoices([]);
+      setSelectingWord(false);
+      setChatLog((prev) => [
+        ...prev,
+        {
+          system: true,
+          text: `Game over after ${roundsPlayed || 0} rounds!`,
+        },
+      ]);
     });
 
     return () => {
@@ -283,6 +327,7 @@ function Game() {
       socket.off('chat_message');
       socket.off('correct_guess');
       socket.off('round_ended');
+      socket.off('game_over');
     };
   }, []);
 
@@ -299,7 +344,7 @@ function Game() {
       setTimeLeftSec(diff);
     };
 
-    update(); // initial
+    update();
     const interval = setInterval(update, 1000);
 
     return () => clearInterval(interval);
@@ -361,10 +406,9 @@ function Game() {
     socket.emit('select_word', { word });
   };
 
-  // SCREEN 1: Not joined yet
   if (!joined) {
     return (
-      <div className="min-h-screen w-screen flex items-center justify-center bg-slate-900 text-slate-100">
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-900 text-slate-100">
         <div className="w-full max-w-md bg-slate-800 rounded-xl shadow-lg p-6">
           <h1 className="text-2xl font-bold mb-4 text-center">Scribble Clone</h1>
 
@@ -434,10 +478,9 @@ function Game() {
     );
   }
 
-  // SCREEN 2: Lobby (joined, game not started)
   if (!gameStarted) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-slate-100">
+      <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-slate-100">
         <div className="bg-slate-800 rounded-xl shadow-lg p-6 w-full max-w-lg">
           <h1 className="text-xl font-bold mb-2 text-center">Lobby</h1>
           <p className="text-sm text-slate-400 text-center mb-4">
@@ -491,19 +534,66 @@ function Game() {
             </div>
           )}
         </div>
+
+        {gameOverData && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-slate-700">
+              <h2 className="text-2xl font-bold mb-2 text-center text-amber-200">
+                Game Over
+              </h2>
+              <p className="text-sm text-slate-300 mb-4 text-center">
+                Final leaderboard after {gameOverData.roundsPlayed || 3} rounds
+              </p>
+              <ul className="space-y-1 text-sm max-h-64 overflow-y-auto">
+                {Object.entries(gameOverData.players || {})
+                  .map(([id, p]) => ({ id, ...p }))
+                  .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+                  .map((p, idx) => (
+                    <li
+                      key={p.id}
+                      className="flex justify-between px-3 py-2 rounded bg-slate-700/70"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400 w-6 text-right">
+                          #{idx + 1}
+                        </span>
+                        <span>{p.name}</span>
+                      </span>
+                      <span className="font-mono text-slate-100">
+                        {p.score ?? 0}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+              <div className="mt-4 flex justify-end">
+                <button
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold"
+                  onClick={() => setGameOverData(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
   // Helper to render blanks for guessers
   const renderBlanks = () => {
+    if (wordMask) {
+      return wordMask
+        .split('')
+        .map((ch) => (ch === ' ' ? ' ' : '_'))
+        .join(' ');
+    }
     if (!wordLength) return '';
     return Array(wordLength).fill('_').join(' ');
   };
 
-  // SCREEN 3: Game started (canvas + chat + word info)
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
+    <div className="h-screen bg-slate-900 text-slate-100 flex flex-col">
       <header className="w-full border-b border-slate-800 bg-slate-950/70 backdrop-blur flex items-center justify-between px-6 py-3">
         <div>
           <h1 className="text-lg font-bold">Scribble Clone</h1>
@@ -526,9 +616,8 @@ function Game() {
         </div>
       </header>
 
-      <main className="flex flex-1 overflow-hidden">
-        {/* Left: Canvas and word info */}
-        <div className="flex-1 flex flex-col items-center justify-start p-4 gap-3">
+      <main className="flex flex-1 overflow-hidden min-h-0">
+        <div className="flex-1 flex flex-col items-center justify-start p-4 gap-3 min-h-0">
           <div className="w-full max-w-4xl text-center mb-2">
             {isDrawer ? (
               myWord ? (
@@ -587,8 +676,7 @@ function Game() {
           <CanvasBoard isDrawer={isDrawer} />
         </div>
 
-        {/* Right: players + chat */}
-        <aside className="w-80 border-l border-slate-800 flex flex-col">
+        <aside className="w-80 border-l border-slate-800 flex flex-col min-h-0">
           <div className="border-b border-slate-800 p-4">
             <h2 className="text-sm font-semibold mb-2 uppercase tracking-wide text-slate-400">
               Players
@@ -618,11 +706,11 @@ function Game() {
             </ul>
           </div>
 
-          <div className="flex-1 flex flex-col p-4">
+          <div className="flex-1 flex flex-col p-4 min-h-0">
             <h2 className="text-sm font-semibold mb-2 uppercase tracking-wide text-slate-400">
               Chat / Guesses
             </h2>
-            <div className="flex-1 mb-3 rounded-lg border border-slate-800 bg-slate-900/60 overflow-y-auto p-2 text-sm">
+            <div className="flex-1 mb-3 rounded-lg border border-slate-800 bg-slate-900/60 overflow-y-auto p-2 text-sm min-h-0">
               {chatLog.map((entry, idx) =>
                 entry.system ? (
                   <div key={idx} className="mb-1 italic text-slate-400">
@@ -660,7 +748,6 @@ function Game() {
         </aside>
       </main>
 
-      {/* Round over modal / scoreboard */}
       {showScoreModal && scoreboard && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
           <div className="bg-slate-800 rounded-xl p-6 w-full max-w-sm shadow-xl">
@@ -693,6 +780,48 @@ function Game() {
             <p className="mt-4 text-xs text-slate-400 text-center">
               Next round starting shortly…
             </p>
+          </div>
+        </div>
+      )}
+
+      {gameOverData && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-slate-700">
+            <h2 className="text-2xl font-bold mb-2 text-center text-amber-200">
+              Game Over
+            </h2>
+            <p className="text-sm text-slate-300 mb-4 text-center">
+              Final leaderboard after {gameOverData.roundsPlayed || 3} rounds
+            </p>
+            <ul className="space-y-1 text-sm max-h-64 overflow-y-auto">
+              {Object.entries(gameOverData.players || {})
+                .map(([id, p]) => ({ id, ...p }))
+                .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+                .map((p, idx) => (
+                  <li
+                    key={p.id}
+                    className="flex justify-between px-3 py-2 rounded bg-slate-700/70"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400 w-6 text-right">
+                        #{idx + 1}
+                      </span>
+                      <span>{p.name}</span>
+                    </span>
+                    <span className="font-mono text-slate-100">
+                      {p.score ?? 0}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+            <div className="mt-4 flex justify-end">
+              <button
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold"
+                onClick={() => setGameOverData(null)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

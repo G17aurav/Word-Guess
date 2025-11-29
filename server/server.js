@@ -23,7 +23,14 @@ const io = new Server(server, {
 // }
 const rooms = {};
 
-const ROUND_MS = 90_000; // 90 seconds
+const ROUND_MS = 90_000;
+const MAX_ROUNDS = 3;
+
+const maskWord = (word = '') =>
+  word
+    .split('')
+    .map((ch) => (ch === ' ' ? ' ' : '_'))
+    .join('');
 
 // Simple room code generator (e.g. "k3f9a2")
 function generateRoomCode() {
@@ -47,14 +54,13 @@ function getRandomWords(count = 3) {
   return picks;
 }
 
-// End the current round: show scores, then schedule next round
+
 function endRound(roomCode, { immediateNext = false } = {}) {
   const room = rooms[roomCode];
   if (!room) return;
 
   console.log('Ending round in room', roomCode, 'word =', room.currentWord);
 
-  // Ensure turn order matches current player list
   const playerIds = Object.keys(room.players);
   room.turnOrder = room.turnOrder.filter((id) => room.players[id]);
   if (room.turnOrder.length === 0 && playerIds.length > 0) {
@@ -68,7 +74,6 @@ function endRound(roomCode, { immediateNext = false } = {}) {
     room.roundTimeout = null;
   }
 
-  // emit scores + word for modal
   io.to(roomCode).emit('round_ended', {
     players: room.players,
     word: room.currentWord,
@@ -86,17 +91,28 @@ function endRound(roomCode, { immediateNext = false } = {}) {
   room.wordOptions = [];
   room.strokes = [];
   io.to(roomCode).emit('clear');
+  room.wordMask = '';
 
   // If everyone has drawn, advance to next round cycle
   const allDrew =
     room.turnOrder.length > 0 &&
     room.turnOrder.every((id) => room.drawnThisRound && room.drawnThisRound[id]);
+  const reachedMaxRounds = allDrew && room.roundNumber >= MAX_ROUNDS;
   if (allDrew) {
     room.drawnThisRound = {};
     room.roundNumber += 1;
   }
 
-  // schedule next round after 5s (or immediately if requested) if game still running and there are players
+  // If game is over, announce and stop scheduling new rounds
+  if (reachedMaxRounds) {
+    room.gameStarted = false;
+    io.to(roomCode).emit('game_over', {
+      players: room.players,
+      roundsPlayed: MAX_ROUNDS,
+    });
+    return;
+  }
+
   if (room.gameStarted && Object.keys(room.players).length > 0) {
     const delayMs = immediateNext ? 0 : 5000;
     setTimeout(() => {
@@ -105,7 +121,7 @@ function endRound(roomCode, { immediateNext = false } = {}) {
   }
 }
 
-// Start a drawing round in a room: choose drawer + word, reset guessedPlayers, set timer
+// Start a drawing round in a room
 function startRound(roomCode) {
   const room = rooms[roomCode];
   if (!room) return;
@@ -153,8 +169,9 @@ function startRound(roomCode) {
   room.drawerId = drawerId;
   room.currentWord = null;
   room.wordOptions = getRandomWords(3);
-  room.guessedPlayers = {}; // socketId -> true
+  room.guessedPlayers = {};
   room.roundEndTime = null;
+  room.wordMask = '';
   if (room.roundTimeout) {
     clearTimeout(room.roundTimeout);
     room.roundTimeout = null;
@@ -179,7 +196,7 @@ function startRound(roomCode) {
   io.to(roomCode).emit('round_started', {
     drawerId,
     wordLength: 0,
-    roundEndTime: null, // starts after drawer picks
+    roundEndTime: null,
     roundNumber: room.roundNumber,
     turnNumber,
     totalTurns,
@@ -192,7 +209,6 @@ function startRound(roomCode) {
 io.on('connection', (socket) => {
   console.log('New socket connected:', socket.id);
 
-  // Optional: log all events for debugging
   socket.onAny((event, ...args) => {
     console.log('Event from', socket.id, '->', event, args);
   });
@@ -210,13 +226,13 @@ io.on('connection', (socket) => {
 
     const roomCode = generateRoomCode();
     rooms[roomCode] = {
-      players: {},           // socketId -> { name, score }
+      players: {},          
       strokes: [],
       hostId: socket.id,
       gameStarted: false,
       drawerId: null,
       currentWord: null,
-      guessedPlayers: {},    // socketId -> true
+      guessedPlayers: {},  
       turnOrder: [],
       drawerIndex: 0,
       roundEndTime: null,
@@ -224,6 +240,7 @@ io.on('connection', (socket) => {
       wordOptions: [],
       roundNumber: 1,
       drawnThisRound: {},
+      wordMask: '',
     };
 
     const room = rooms[roomCode];
@@ -285,6 +302,7 @@ io.on('connection', (socket) => {
       gameStarted: room.gameStarted,
       drawerId: room.drawerId || null,
       wordLength: room.currentWord ? room.currentWord.length : 0,
+      wordMask: room.wordMask || '',
     });
 
     io.to(trimmedCode).emit('players_update', {
@@ -315,7 +333,7 @@ io.on('connection', (socket) => {
     // Let clients switch UI to game screen
     io.to(roomCode).emit('game_started');
 
-    // Start first round (choose drawer + word)
+    // Start first round
     startRound(roomCode);
   });
 
@@ -327,7 +345,7 @@ io.on('connection', (socket) => {
     const room = rooms[roomCode];
     if (socket.id !== room.drawerId) return;
     if (!room.wordOptions || room.wordOptions.length === 0) return;
-    if (room.currentWord) return; // already chosen
+    if (room.currentWord) return;
 
     const normalizedChoice = (word || '').toLowerCase();
     const index = room.wordOptions.findIndex(
@@ -360,17 +378,19 @@ io.on('connection', (socket) => {
       endTime
     );
 
+    room.wordMask = maskWord(chosenWord);
+
     io.to(roomCode).emit('word_selected', {
       drawerId: room.drawerId,
       wordLength: chosenWord.length,
       roundEndTime: endTime,
+      wordMask: room.wordMask,
     });
 
     // Send the actual word ONLY to the drawer
     io.to(socket.id).emit('your_word', { word: chosenWord });
   });
 
-  // Drawing events (per room)
   socket.on('draw', (data) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
@@ -382,7 +402,6 @@ io.on('connection', (socket) => {
     socket.to(roomCode).emit('draw', data);
   });
 
-  // Clear board (per room)
   socket.on('clear', () => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
@@ -393,7 +412,6 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('clear');
   });
 
-  // Chat + guessing (per room) with scoring
   socket.on('chat_message', ({ message }) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
@@ -418,10 +436,9 @@ io.on('connection', (socket) => {
       trimmed.toLowerCase() === room.currentWord.toLowerCase();
 
     if (isCorrect) {
-      // mark this player as having guessed correctly
       room.guessedPlayers[socket.id] = true;
 
-      // award points scaled by remaining time (max 100, min 5)
+      // award points scaled by remaining time
       const now = Date.now();
       const timeLeftMs = room.roundEndTime
         ? Math.max(0, room.roundEndTime - now)
@@ -458,7 +475,7 @@ io.on('connection', (socket) => {
         hostId: room.hostId,
       });
 
-      // If everyone (except the drawer) has guessed correctly, end the round early
+      // If everyone has guessed correctly, end the round early
       const totalGuessers = Object.keys(room.players).filter(
         (id) => id !== room.drawerId
       ).length;
@@ -474,7 +491,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Normal chat message (not a correct guess)
     io.to(roomCode).emit('chat_message', { name, message: trimmed });
   });
 
@@ -492,7 +508,6 @@ io.on('connection', (socket) => {
         delete room.drawnThisRound[socket.id];
       }
 
-      // Remove from turnOrder
       room.turnOrder = room.turnOrder.filter((id) => id !== socket.id);
       if (room.drawerId === socket.id) {
         room.drawerId = null;
@@ -514,7 +529,6 @@ io.on('connection', (socket) => {
         });
       } else {
         console.log('Deleting empty room:', roomCode);
-        // clear any outstanding timer
         if (room.roundTimeout) {
           clearTimeout(room.roundTimeout);
         }
