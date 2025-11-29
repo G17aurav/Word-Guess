@@ -1,15 +1,15 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const words = require('./beginnerWords');
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const words = require("./beginnerWords");
 
 const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
+    origin: "*",
+    methods: ["GET", "POST"],
   },
 });
 
@@ -26,11 +26,11 @@ const rooms = {};
 const ROUND_MS = 90_000;
 const MAX_ROUNDS = 3;
 
-const maskWord = (word = '') =>
+const maskWord = (word = "") =>
   word
-    .split('')
-    .map((ch) => (ch === ' ' ? ' ' : '_'))
-    .join('');
+    .split("")
+    .map((ch) => (ch === " " ? " " : "_"))
+    .join("");
 
 // Simple room code generator (e.g. "k3f9a2")
 function generateRoomCode() {
@@ -54,12 +54,11 @@ function getRandomWords(count = 3) {
   return picks;
 }
 
-
 function endRound(roomCode, { immediateNext = false } = {}) {
   const room = rooms[roomCode];
   if (!room) return;
 
-  console.log('Ending round in room', roomCode, 'word =', room.currentWord);
+  console.log("Ending round in room", roomCode, "word =", room.currentWord);
 
   const playerIds = Object.keys(room.players);
   room.turnOrder = room.turnOrder.filter((id) => room.players[id]);
@@ -74,12 +73,14 @@ function endRound(roomCode, { immediateNext = false } = {}) {
     room.roundTimeout = null;
   }
 
-  io.to(roomCode).emit('round_ended', {
+  io.to(roomCode).emit("round_ended", {
     players: room.players,
     word: room.currentWord,
     roundComplete:
       room.turnOrder.length > 0 &&
-      room.turnOrder.every((id) => room.drawnThisRound && room.drawnThisRound[id]),
+      room.turnOrder.every(
+        (id) => room.drawnThisRound && room.drawnThisRound[id]
+      ),
     roundNumber: room.roundNumber,
   });
 
@@ -90,13 +91,15 @@ function endRound(roomCode, { immediateNext = false } = {}) {
   room.roundEndTime = null;
   room.wordOptions = [];
   room.strokes = [];
-  io.to(roomCode).emit('clear');
-  room.wordMask = '';
+  io.to(roomCode).emit("clear");
+  room.wordMask = "";
 
   // If everyone has drawn, advance to next round cycle
   const allDrew =
     room.turnOrder.length > 0 &&
-    room.turnOrder.every((id) => room.drawnThisRound && room.drawnThisRound[id]);
+    room.turnOrder.every(
+      (id) => room.drawnThisRound && room.drawnThisRound[id]
+    );
   const reachedMaxRounds = allDrew && room.roundNumber >= MAX_ROUNDS;
   if (allDrew) {
     room.drawnThisRound = {};
@@ -106,7 +109,7 @@ function endRound(roomCode, { immediateNext = false } = {}) {
   // If game is over, announce and stop scheduling new rounds
   if (reachedMaxRounds) {
     room.gameStarted = false;
-    io.to(roomCode).emit('game_over', {
+    io.to(roomCode).emit("game_over", {
       players: room.players,
       roundsPlayed: MAX_ROUNDS,
     });
@@ -136,7 +139,7 @@ function startRound(roomCode) {
     room.drawerIndex = 0;
   }
   if (!room.drawnThisRound) room.drawnThisRound = {};
-  if (typeof room.roundNumber !== 'number') room.roundNumber = 1;
+  if (typeof room.roundNumber !== "number") room.roundNumber = 1;
 
   // If everyone has drawn in this round, reset for the next round
   const everyoneDrew = room.turnOrder.every((id) => room.drawnThisRound[id]);
@@ -171,7 +174,7 @@ function startRound(roomCode) {
   room.wordOptions = getRandomWords(3);
   room.guessedPlayers = {};
   room.roundEndTime = null;
-  room.wordMask = '';
+  room.wordMask = "";
   if (room.roundTimeout) {
     clearTimeout(room.roundTimeout);
     room.roundTimeout = null;
@@ -182,18 +185,18 @@ function startRound(roomCode) {
   const totalTurns = room.turnOrder.length;
 
   console.log(
-    'Starting round in room',
+    "Starting round in room",
     roomCode,
-    'round =',
+    "round =",
     room.roundNumber,
-    'turn =',
-    turnNumber + '/' + totalTurns,
-    'drawer =',
+    "turn =",
+    turnNumber + "/" + totalTurns,
+    "drawer =",
     drawerId
   );
 
   // Notify everyone who is drawing, and send only the length + end time
-  io.to(roomCode).emit('round_started', {
+  io.to(roomCode).emit("round_started", {
     drawerId,
     wordLength: 0,
     roundEndTime: null,
@@ -203,36 +206,36 @@ function startRound(roomCode) {
   });
 
   // Send word options ONLY to the drawer
-  io.to(drawerId).emit('word_options', { options: room.wordOptions });
+  io.to(drawerId).emit("word_options", { options: room.wordOptions });
 }
 
-io.on('connection', (socket) => {
-  console.log('New socket connected:', socket.id);
+io.on("connection", (socket) => {
+  console.log("New socket connected:", socket.id);
 
   socket.onAny((event, ...args) => {
-    console.log('Event from', socket.id, '->', event, args);
+    console.log("Event from", socket.id, "->", event, args);
   });
 
   // Create a new room and make this socket the host
-  socket.on('create_room', ({ name }) => {
-    console.log('create_room received from', socket.id, 'name =', name);
+  socket.on("create_room", ({ name }) => {
+    console.log("create_room received from", socket.id, "name =", name);
 
-    const trimmedName = (name || '').trim();
+    const trimmedName = (name || "").trim();
     if (!trimmedName) {
-      console.log('Name missing, sending room_error');
-      socket.emit('room_error', { message: 'Name is required.' });
+      console.log("Name missing, sending room_error");
+      socket.emit("room_error", { message: "Name is required." });
       return;
     }
 
     const roomCode = generateRoomCode();
     rooms[roomCode] = {
-      players: {},          
+      players: {},
       strokes: [],
       hostId: socket.id,
       gameStarted: false,
       drawerId: null,
       currentWord: null,
-      guessedPlayers: {},  
+      guessedPlayers: {},
       turnOrder: [],
       drawerIndex: 0,
       roundEndTime: null,
@@ -240,7 +243,7 @@ io.on('connection', (socket) => {
       wordOptions: [],
       roundNumber: 1,
       drawnThisRound: {},
-      wordMask: '',
+      wordMask: "",
     };
 
     const room = rooms[roomCode];
@@ -252,34 +255,41 @@ io.on('connection', (socket) => {
     room.players[socket.id] = { name: trimmedName, score: 0 };
     room.turnOrder.push(socket.id);
 
-    console.log('Room created:', roomCode, 'by', trimmedName);
+    console.log("Room created:", roomCode, "by", trimmedName);
 
-    socket.emit('room_created', {
+    socket.emit("room_created", {
       roomCode,
       players: room.players,
       hostId: room.hostId,
     });
 
-    io.to(roomCode).emit('players_update', {
+    io.to(roomCode).emit("players_update", {
       players: room.players,
       hostId: room.hostId,
     });
   });
 
   // Join an existing room
-  socket.on('join_room', ({ name, roomCode }) => {
-    console.log('join_room received from', socket.id, 'name =', name, 'roomCode =', roomCode);
+  socket.on("join_room", ({ name, roomCode }) => {
+    console.log(
+      "join_room received from",
+      socket.id,
+      "name =",
+      name,
+      "roomCode =",
+      roomCode
+    );
 
-    const trimmedName = (name || '').trim();
-    const trimmedCode = (roomCode || '').trim().toLowerCase();
+    const trimmedName = (name || "").trim();
+    const trimmedCode = (roomCode || "").trim().toLowerCase();
 
     if (!trimmedName) {
-      socket.emit('room_error', { message: 'Name is required.' });
+      socket.emit("room_error", { message: "Name is required." });
       return;
     }
 
     if (!trimmedCode || !rooms[trimmedCode]) {
-      socket.emit('room_error', { message: 'Room not found.' });
+      socket.emit("room_error", { message: "Room not found." });
       return;
     }
 
@@ -293,29 +303,29 @@ io.on('connection', (socket) => {
     room.players[socket.id] = { name: trimmedName, score: 0 };
     room.turnOrder.push(socket.id);
 
-    console.log('Player', trimmedName, 'joined room', trimmedCode);
+    console.log("Player", trimmedName, "joined room", trimmedCode);
 
-    socket.emit('room_joined', {
+    socket.emit("room_joined", {
       roomCode: trimmedCode,
       players: room.players,
       hostId: room.hostId,
       gameStarted: room.gameStarted,
       drawerId: room.drawerId || null,
       wordLength: room.currentWord ? room.currentWord.length : 0,
-      wordMask: room.wordMask || '',
+      wordMask: room.wordMask || "",
     });
 
-    io.to(trimmedCode).emit('players_update', {
+    io.to(trimmedCode).emit("players_update", {
       players: room.players,
       hostId: room.hostId,
     });
 
     // Send existing strokes so the new player sees the current drawing
-    socket.emit('init_strokes', room.strokes);
+    socket.emit("init_strokes", room.strokes);
   });
 
   // Host starts the game
-  socket.on('start_game', () => {
+  socket.on("start_game", () => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
 
@@ -323,22 +333,22 @@ io.on('connection', (socket) => {
 
     // Only host can start the game
     if (room.hostId !== socket.id) {
-      console.log('start_game denied for', socket.id, 'not host of', roomCode);
+      console.log("start_game denied for", socket.id, "not host of", roomCode);
       return;
     }
 
     room.gameStarted = true;
-    console.log('Game started in room', roomCode);
+    console.log("Game started in room", roomCode);
 
     // Let clients switch UI to game screen
-    io.to(roomCode).emit('game_started');
+    io.to(roomCode).emit("game_started");
 
     // Start first round
     startRound(roomCode);
   });
 
   // Drawer picks one word from the provided options to start the timer
-  socket.on('select_word', ({ word }) => {
+  socket.on("select_word", ({ word }) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
 
@@ -347,9 +357,9 @@ io.on('connection', (socket) => {
     if (!room.wordOptions || room.wordOptions.length === 0) return;
     if (room.currentWord) return;
 
-    const normalizedChoice = (word || '').toLowerCase();
+    const normalizedChoice = (word || "").toLowerCase();
     const index = room.wordOptions.findIndex(
-      (w) => (w || '').toLowerCase() === normalizedChoice
+      (w) => (w || "").toLowerCase() === normalizedChoice
     );
     if (index === -1) return;
 
@@ -368,19 +378,19 @@ io.on('connection', (socket) => {
     }, ROUND_MS);
 
     console.log(
-      'Word selected in room',
+      "Word selected in room",
       roomCode,
-      'drawer =',
+      "drawer =",
       socket.id,
-      'word =',
+      "word =",
       chosenWord,
-      'endsAt =',
+      "endsAt =",
       endTime
     );
 
     room.wordMask = maskWord(chosenWord);
 
-    io.to(roomCode).emit('word_selected', {
+    io.to(roomCode).emit("word_selected", {
       drawerId: room.drawerId,
       wordLength: chosenWord.length,
       roundEndTime: endTime,
@@ -388,10 +398,10 @@ io.on('connection', (socket) => {
     });
 
     // Send the actual word ONLY to the drawer
-    io.to(socket.id).emit('your_word', { word: chosenWord });
+    io.to(socket.id).emit("your_word", { word: chosenWord });
   });
 
-  socket.on('draw', (data) => {
+  socket.on("draw", (data) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
 
@@ -399,20 +409,20 @@ io.on('connection', (socket) => {
     if (socket.id !== room.drawerId) return;
     room.strokes.push(data);
 
-    socket.to(roomCode).emit('draw', data);
+    socket.to(roomCode).emit("draw", data);
   });
 
-  socket.on('clear', () => {
+  socket.on("clear", () => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
 
     const room = rooms[roomCode];
     if (socket.id !== room.drawerId) return;
     room.strokes = [];
-    io.to(roomCode).emit('clear');
+    io.to(roomCode).emit("clear");
   });
 
-  socket.on('chat_message', ({ message }) => {
+  socket.on("chat_message", ({ message }) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
 
@@ -420,8 +430,8 @@ io.on('connection', (socket) => {
     const player = room.players[socket.id];
     if (!player) return;
 
-    const name = player.name || 'Anonymous';
-    const trimmed = (message || '').trim();
+    const name = player.name || "Anonymous";
+    const trimmed = (message || "").trim();
     if (!trimmed) return;
 
     const hasWord = !!room.currentWord;
@@ -446,23 +456,23 @@ io.on('connection', (socket) => {
       const timeRatio = Math.min(1, timeLeftMs / ROUND_MS);
       const pointsAwarded = Math.max(5, Math.round(100 * timeRatio));
 
-      if (typeof player.score !== 'number') player.score = 0;
+      if (typeof player.score !== "number") player.score = 0;
       player.score += pointsAwarded;
 
       console.log(
-        'Correct guess in room',
+        "Correct guess in room",
         roomCode,
-        'by',
+        "by",
         socket.id,
-        '(' + name + ')',
-        'awarded',
+        "(" + name + ")",
+        "awarded",
         pointsAwarded,
-        'new score =',
+        "new score =",
         player.score
       );
 
       // notify everyone that this player guessed correctly
-      io.to(roomCode).emit('correct_guess', {
+      io.to(roomCode).emit("correct_guess", {
         playerId: socket.id,
         name,
         score: player.score,
@@ -470,7 +480,7 @@ io.on('connection', (socket) => {
       });
 
       // update everyone’s score displays
-      io.to(roomCode).emit('players_update', {
+      io.to(roomCode).emit("players_update", {
         players: room.players,
         hostId: room.hostId,
       });
@@ -491,12 +501,12 @@ io.on('connection', (socket) => {
       return;
     }
 
-    io.to(roomCode).emit('chat_message', { name, message: trimmed });
+    io.to(roomCode).emit("chat_message", { name, message: trimmed });
   });
 
   // Disconnect handling
-  socket.on('disconnect', () => {
-    console.log('Socket disconnected:', socket.id);
+  socket.on("disconnect", () => {
+    console.log("Socket disconnected:", socket.id);
 
     const roomCode = socket.data.roomCode;
     const name = socket.data.name;
@@ -523,12 +533,12 @@ io.on('connection', (socket) => {
       }
 
       if (Object.keys(room.players).length > 0) {
-        io.to(roomCode).emit('players_update', {
+        io.to(roomCode).emit("players_update", {
           players: room.players,
           hostId: room.hostId,
         });
       } else {
-        console.log('Deleting empty room:', roomCode);
+        console.log("Deleting empty room:", roomCode);
         if (room.roundTimeout) {
           clearTimeout(room.roundTimeout);
         }
@@ -540,5 +550,5 @@ io.on('connection', (socket) => {
 
 const PORT = 4000;
 server.listen(PORT, () => {
-  console.log('Server running on http://localhost:' + PORT);
+  console.log("Server running on http://localhost:" + PORT);
 });
