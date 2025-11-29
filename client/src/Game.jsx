@@ -333,6 +333,7 @@ function Game() {
 
   const handleSendChat = (e) => {
     e.preventDefault();
+    if (isDrawer) return;
     const msg = chatInput.trim();
     if (!msg) return;
     socket.emit('chat_message', { message: msg });
@@ -573,7 +574,7 @@ function Game() {
               )}
             </div>
           )}
-          <CanvasBoard />
+          <CanvasBoard isDrawer={isDrawer} />
         </div>
 
         {/* Right: players + chat */}
@@ -630,13 +631,17 @@ function Game() {
             <form onSubmit={handleSendChat} className="flex gap-2">
               <input
                 className="flex-1 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="Type your guess..."
+                placeholder={
+                  isDrawer ? "Drawing players can't chat" : 'Type your guess...'
+                }
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
+                disabled={isDrawer}
               />
               <button
                 type="submit"
-                className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold"
+                className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={isDrawer}
               >
                 Send
               </button>

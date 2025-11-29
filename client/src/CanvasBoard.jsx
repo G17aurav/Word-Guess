@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { socket } from './socket';
 
-function CanvasBoard() {
+function CanvasBoard({ isDrawer = false }) {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
 
@@ -25,6 +25,14 @@ function CanvasBoard() {
     ctx.lineCap = 'round';
     ctxRef.current = ctx;
   }, []);
+
+  // Stop any local drawing if the role changes
+  useEffect(() => {
+    if (!isDrawer) {
+      setIsDrawing(false);
+      setLastPos(null);
+    }
+  }, [isDrawer]);
 
   // Socket listeners
   useEffect(() => {
@@ -68,12 +76,14 @@ function CanvasBoard() {
   };
 
   const handleMouseDown = (e) => {
+    if (!isDrawer) return;
     const pos = getCanvasCoords(e);
     setLastPos(pos);
     setIsDrawing(true);
   };
 
   const handleMouseMove = (e) => {
+    if (!isDrawer) return;
     if (!isDrawing || !lastPos) return;
     const newPos = getCanvasCoords(e);
 
@@ -118,6 +128,7 @@ function CanvasBoard() {
   };
 
   const handleClearClick = () => {
+    if (!isDrawer) return;
     clearCanvas();
     socket.emit('clear');
   };
@@ -132,9 +143,10 @@ function CanvasBoard() {
           </span>
           <input
             type="color"
-            className="w-8 h-8 rounded cursor-pointer bg-transparent border border-slate-600"
+            className="w-8 h-8 rounded cursor-pointer bg-transparent border border-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
             value={color}
             onChange={(e) => setColor(e.target.value)}
+            disabled={!isDrawer}
           />
         </div>
 
@@ -148,14 +160,16 @@ function CanvasBoard() {
             max="30"
             value={size}
             onChange={(e) => setSize(Number(e.target.value))}
-            className="w-32"
+            className="w-32 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!isDrawer}
           />
           <span className="text-xs text-slate-300">{size}px</span>
         </div>
 
         <button
-          className="ml-auto px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-xs font-semibold uppercase tracking-wide"
+          className="ml-auto px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-xs font-semibold uppercase tracking-wide disabled:opacity-60 disabled:cursor-not-allowed"
           onClick={handleClearClick}
+          disabled={!isDrawer}
         >
           Clear Board
         </button>
@@ -165,7 +179,9 @@ function CanvasBoard() {
       <div className="w-full aspect-[16/10] bg-white rounded-lg overflow-hidden border border-slate-700 shadow-inner">
         <canvas
           ref={canvasRef}
-          className="w-full h-full block cursor-crosshair"
+          className={`w-full h-full block ${
+            isDrawer ? 'cursor-crosshair' : 'cursor-not-allowed'
+          }`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}

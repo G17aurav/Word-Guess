@@ -373,6 +373,7 @@ io.on('connection', (socket) => {
     if (!roomCode || !rooms[roomCode]) return;
 
     const room = rooms[roomCode];
+    if (socket.id !== room.drawerId) return;
     room.strokes.push(data);
 
     socket.to(roomCode).emit('draw', data);
@@ -383,7 +384,9 @@ io.on('connection', (socket) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
 
-    rooms[roomCode].strokes = [];
+    const room = rooms[roomCode];
+    if (socket.id !== room.drawerId) return;
+    room.strokes = [];
     io.to(roomCode).emit('clear');
   });
 
@@ -403,6 +406,7 @@ io.on('connection', (socket) => {
     const hasWord = !!room.currentWord;
     const isDrawer = socket.id === room.drawerId;
     const alreadyGuessed = room.guessedPlayers[socket.id];
+    if (isDrawer) return;
 
     const isCorrect =
       hasWord &&
