@@ -192,11 +192,21 @@ function Game() {
     });
 
     // correct guess messages
-    socket.on('correct_guess', ({ playerId, name, score }) => {
-      console.log('correct_guess received from', name, 'score =', score);
+    socket.on('correct_guess', ({ playerId, name, score, pointsAwarded }) => {
+      console.log(
+        'correct_guess received from',
+        name,
+        'score =',
+        score,
+        'points =',
+        pointsAwarded
+      );
       setChatLog((prev) => [
         ...prev,
-        { system: true, text: `${name} guessed the word! (+10 points)` },
+        {
+          system: true,
+          text: `${name} guessed the word! (+${pointsAwarded || 0} points)`,
+        },
       ]);
     });
 

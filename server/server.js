@@ -48,7 +48,7 @@ function getRandomWords(count = 3) {
 }
 
 // End the current round: show scores, then schedule next round
-function endRound(roomCode) {
+function endRound(roomCode, { immediateNext = false } = {}) {
   const room = rooms[roomCode];
   if (!room) return;
 
@@ -84,6 +84,8 @@ function endRound(roomCode) {
   room.guessedPlayers = {};
   room.roundEndTime = null;
   room.wordOptions = [];
+  room.strokes = [];
+  io.to(roomCode).emit('clear');
 
   // If everyone has drawn, advance to next round cycle
   const allDrew =
@@ -94,11 +96,12 @@ function endRound(roomCode) {
     room.roundNumber += 1;
   }
 
-  // schedule next round after 5s if game still running and there are players
+  // schedule next round after 5s (or immediately if requested) if game still running and there are players
   if (room.gameStarted && Object.keys(room.players).length > 0) {
+    const delayMs = immediateNext ? 0 : 5000;
     setTimeout(() => {
       startRound(roomCode);
-    }, 5000);
+    }, delayMs);
   }
 }
 
@@ -418,9 +421,16 @@ io.on('connection', (socket) => {
       // mark this player as having guessed correctly
       room.guessedPlayers[socket.id] = true;
 
-      // award points
+      // award points scaled by remaining time (max 100, min 5)
+      const now = Date.now();
+      const timeLeftMs = room.roundEndTime
+        ? Math.max(0, room.roundEndTime - now)
+        : 0;
+      const timeRatio = Math.min(1, timeLeftMs / ROUND_MS);
+      const pointsAwarded = Math.max(5, Math.round(100 * timeRatio));
+
       if (typeof player.score !== 'number') player.score = 0;
-      player.score += 10;
+      player.score += pointsAwarded;
 
       console.log(
         'Correct guess in room',
@@ -428,6 +438,8 @@ io.on('connection', (socket) => {
         'by',
         socket.id,
         '(' + name + ')',
+        'awarded',
+        pointsAwarded,
         'new score =',
         player.score
       );
@@ -437,6 +449,7 @@ io.on('connection', (socket) => {
         playerId: socket.id,
         name,
         score: player.score,
+        pointsAwarded,
       });
 
       // update everyone’s score displays
@@ -444,6 +457,19 @@ io.on('connection', (socket) => {
         players: room.players,
         hostId: room.hostId,
       });
+
+      // If everyone (except the drawer) has guessed correctly, end the round early
+      const totalGuessers = Object.keys(room.players).filter(
+        (id) => id !== room.drawerId
+      ).length;
+      const correctGuessers = Object.keys(room.guessedPlayers).length;
+      if (totalGuessers > 0 && correctGuessers >= totalGuessers) {
+        if (room.roundTimeout) {
+          clearTimeout(room.roundTimeout);
+          room.roundTimeout = null;
+        }
+        endRound(roomCode, { immediateNext: true });
+      }
 
       return;
     }

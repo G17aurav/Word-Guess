@@ -48,14 +48,21 @@ function CanvasBoard({ isDrawer = false }) {
       clearCanvas();
     };
 
+    const handleRoundEnded = () => {
+      // Ensure board resets at the end of a turn
+      clearCanvas();
+    };
+
     socket.on('init_strokes', handleInitStrokes);
     socket.on('draw', handleDraw);
     socket.on('clear', handleClear);
+    socket.on('round_ended', handleRoundEnded);
 
     return () => {
       socket.off('init_strokes', handleInitStrokes);
       socket.off('draw', handleDraw);
       socket.off('clear', handleClear);
+      socket.off('round_ended', handleRoundEnded);
     };
   }, []);
 
